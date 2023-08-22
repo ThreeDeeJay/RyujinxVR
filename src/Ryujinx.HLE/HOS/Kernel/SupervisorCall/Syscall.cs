@@ -3006,5 +3006,38 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
         {
             return (address & 3) != 0;
         }
+
+        ulong encoding = 10000000000;
+
+        // VR
+        [Svc(0x80)]
+        public Result GetVRFOV(out uint fov)
+        {
+            byte[] bytes = BitConverter.GetBytes(103.9f);
+            fov = BitConverter.ToUInt32(bytes, 0);
+
+            return Result.Success;
+        }
+
+        [Svc(0x81)]
+        public Result GetVRipd(out uint ipd)
+        {
+            byte[] bytes = BitConverter.GetBytes(0.0675f);
+            ipd = BitConverter.ToUInt32(bytes, 0);
+
+            return Result.Success;
+        }
+
+        [Svc(0x82)]
+        public void SignalVRLeftEye()
+        {
+
+        }
+
+        [Svc(0x83)]
+        public void SignalVRRightEye()
+        {
+
+        }
     }
 }

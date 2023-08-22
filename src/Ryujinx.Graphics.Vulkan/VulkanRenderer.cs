@@ -10,6 +10,7 @@ using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Ryujinx.Graphics.Vulkan
@@ -26,6 +27,8 @@ namespace Ryujinx.Graphics.Vulkan
 
         internal FormatCapabilities FormatCapabilities { get; private set; }
         internal HardwareCapabilities Capabilities;
+
+        public Instance Instance { get { return _instance.Instance; } }
 
         internal Vk Api { get; private set; }
         internal KhrSurface SurfaceApi { get; private set; }
@@ -361,7 +364,12 @@ namespace Ryujinx.Graphics.Vulkan
 
         private unsafe void SetupContext(GraphicsDebugLevel logLevel)
         {
-            _instance = VulkanInitialization.CreateInstance(Api, logLevel, _getRequiredExtensions());
+            var exts = _getRequiredExtensions();
+            var vrExts = new string[]{ "VK_KHR_external_memory_capabilities", "VK_KHR_get_physical_device_properties2", "VK_KHR_surface", "VK_KHR_win32_surface", "VK_NV_external_memory_capabilities" };
+
+            var cbnExts = exts.Union(vrExts).ToArray();
+
+            _instance = VulkanInitialization.CreateInstance(Api, logLevel, cbnExts);
             _debugMessenger = new VulkanDebugMessenger(Api, _instance.Instance, logLevel);
 
             if (Api.TryGetInstanceExtension(_instance.Instance, out KhrSurface surfaceApi))
@@ -387,7 +395,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             LoadFeatures(maxQueueCount, queueFamilyIndex);
 
-            _window = new Window(this, _surface, _physicalDevice.PhysicalDevice, _device);
+            _window = new Window(this, _surface, _physicalDevice.PhysicalDevice, _device); // OpenVROpenVR
 
             _initialized = true;
         }

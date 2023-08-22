@@ -42,7 +42,13 @@ namespace Ryujinx.Graphics.Vulkan
             "VK_NV_geometry_shader_passthrough",
             "VK_NV_viewport_array2",
             "VK_EXT_depth_clip_control",
-            "VK_KHR_portability_subset" // As per spec, we should enable this if present.
+            "VK_KHR_portability_subset", // As per spec, we should enable this if present.
+            "VK_KHR_external_memory",
+            "VK_KHR_external_semaphore",
+            "VK_KHR_dedicated_allocation",
+            "VK_KHR_get_memory_requirements2",
+            "VK_KHR_external_memory_win32",
+            "VK_KHR_win32_keyed_mutex"
         };
 
         private static readonly string[] _requiredExtensions = new string[]
