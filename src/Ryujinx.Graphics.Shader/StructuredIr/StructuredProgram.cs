@@ -8,9 +8,14 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 {
     static class StructuredProgram
     {
-        public static StructuredProgramInfo MakeStructuredProgram(IReadOnlyList<Function> functions, ShaderConfig config)
+        public static StructuredProgramInfo MakeStructuredProgram(
+            IReadOnlyList<Function> functions,
+            AttributeUsage attributeUsage,
+            ShaderDefinitions definitions,
+            ResourceManager resourceManager,
+            bool debugMode)
         {
-            StructuredProgramContext context = new StructuredProgramContext(config);
+            StructuredProgramContext context = new(attributeUsage, definitions, resourceManager, debugMode);
 
             for (int funcIndex = 0; funcIndex < functions.Count; funcIndex++)
             {
@@ -20,7 +25,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
                 AggregateType returnType = function.ReturnsValue ? AggregateType.S32 : AggregateType.Void;
 
-                AggregateType[] inArguments  = new AggregateType[function.InArgumentsCount];
+                AggregateType[] inArguments = new AggregateType[function.InArgumentsCount];
                 AggregateType[] outArguments = new AggregateType[function.OutArgumentsCount];
 
                 for (int i = 0; i < inArguments.Length; i++)
@@ -79,17 +84,16 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 {
                     IoVariable ioVariable = (IoVariable)operation.GetSource(0).Value;
                     bool isOutput = storageKind.IsOutput();
-                    bool perPatch = storageKind.IsPerPatch();
                     int location = 0;
                     int component = 0;
 
-                    if (context.Config.HasPerLocationInputOrOutput(ioVariable, isOutput))
+                    if (context.Definitions.HasPerLocationInputOrOutput(ioVariable, isOutput))
                     {
                         location = operation.GetSource(1).Value;
 
                         if (operation.SourcesCount > 2 &&
                             operation.GetSource(2).Type == OperandType.Constant &&
-                            context.Config.HasPerLocationInputOrOutputComponent(ioVariable, location, operation.GetSource(2).Value, isOutput))
+                            context.Definitions.HasPerLocationInputOrOutputComponent(ioVariable, location, operation.GetSource(2).Value, isOutput))
                         {
                             component = operation.GetSource(2).Value;
                         }
@@ -99,7 +103,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 }
                 else if (storageKind == StorageKind.ConstantBuffer && operation.GetSource(0).Type == OperandType.Constant)
                 {
-                    context.Config.ResourceManager.SetUsedConstantBufferBinding(operation.GetSource(0).Value);
+                    context.ResourceManager.SetUsedConstantBufferBinding(operation.GetSource(0).Value);
                 }
             }
 
@@ -126,15 +130,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
             AstTextureOperation GetAstTextureOperation(TextureOperation texOp)
             {
-                return new AstTextureOperation(
-                    inst,
-                    texOp.Type,
-                    texOp.Format,
-                    texOp.Flags,
-                    texOp.CbufSlot,
-                    texOp.Handle,
-                    texOp.Index,
-                    sources);
+                return new AstTextureOperation(inst, texOp.Type, texOp.Format, texOp.Flags, texOp.Binding, texOp.Index, sources);
             }
 
             int componentsCount = BitOperations.PopCount((uint)operation.Index);
@@ -169,9 +165,15 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
                 switch (componentsCount)
                 {
-                    case 2: destType |= AggregateType.Vector2; break;
-                    case 3: destType |= AggregateType.Vector3; break;
-                    case 4: destType |= AggregateType.Vector4; break;
+                    case 2:
+                        destType |= AggregateType.Vector2;
+                        break;
+                    case 3:
+                        destType |= AggregateType.Vector3;
+                        break;
+                    case 4:
+                        destType |= AggregateType.Vector4;
+                        break;
                 }
 
                 AstOperand destVec = context.NewTemp(destType);
@@ -181,7 +183,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 for (int i = 0; i < operation.DestsCount; i++)
                 {
                     AstOperand dest = context.GetOperand(operation.GetDest(i));
-                    AstOperand index = new AstOperand(OperandType.Constant, i);
+                    AstOperand index = new(OperandType.Constant, i);
 
                     dest.VarType = destElemType;
 
@@ -202,7 +204,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 }
 
                 bool isCondSel = inst == Instruction.ConditionalSelect;
-                bool isCopy    = inst == Instruction.Copy;
+                bool isCopy = inst == Instruction.Copy;
 
                 if (isCondSel || isCopy)
                 {
@@ -280,18 +282,6 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 case Instruction.MultiplyHighU32:
                     context.Info.HelperFunctionsMask |= HelperFunctionsMask.MultiplyHighU32;
                     break;
-                case Instruction.Shuffle:
-                    context.Info.HelperFunctionsMask |= HelperFunctionsMask.Shuffle;
-                    break;
-                case Instruction.ShuffleDown:
-                    context.Info.HelperFunctionsMask |= HelperFunctionsMask.ShuffleDown;
-                    break;
-                case Instruction.ShuffleUp:
-                    context.Info.HelperFunctionsMask |= HelperFunctionsMask.ShuffleUp;
-                    break;
-                case Instruction.ShuffleXor:
-                    context.Info.HelperFunctionsMask |= HelperFunctionsMask.ShuffleXor;
-                    break;
                 case Instruction.SwizzleAdd:
                     context.Info.HelperFunctionsMask |= HelperFunctionsMask.SwizzleAdd;
                     break;
@@ -304,9 +294,9 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
 
         private static AggregateType GetVarTypeFromUses(Operand dest)
         {
-            HashSet<Operand> visited = new HashSet<Operand>();
+            HashSet<Operand> visited = new();
 
-            Queue<Operand> pending = new Queue<Operand>();
+            Queue<Operand> pending = new();
 
             bool Enqueue(Operand operand)
             {
@@ -385,7 +375,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
             {
                 Instruction.ImageLoad or
                 Instruction.TextureSample => true,
-                _ => false
+                _ => false,
             };
         }
 
@@ -396,7 +386,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 Instruction.Branch or
                 Instruction.BranchIfFalse or
                 Instruction.BranchIfTrue => true,
-                _ => false
+                _ => false,
             };
         }
 
@@ -408,7 +398,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 Instruction.BitwiseExclusiveOr or
                 Instruction.BitwiseNot or
                 Instruction.BitwiseOr => true,
-                _ => false
+                _ => false,
             };
         }
 
@@ -420,7 +410,7 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                 Instruction.BitwiseExclusiveOr => Instruction.LogicalExclusiveOr,
                 Instruction.BitwiseNot => Instruction.LogicalNot,
                 Instruction.BitwiseOr => Instruction.LogicalOr,
-                _ => throw new ArgumentException($"Unexpected instruction \"{inst}\".")
+                _ => throw new ArgumentException($"Unexpected instruction \"{inst}\"."),
             };
         }
     }

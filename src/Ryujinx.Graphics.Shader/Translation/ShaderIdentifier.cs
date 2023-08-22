@@ -5,18 +5,22 @@ namespace Ryujinx.Graphics.Shader.Translation
 {
     static class ShaderIdentifier
     {
-        public static ShaderIdentification Identify(IReadOnlyList<Function> functions, ShaderConfig config)
+        public static ShaderIdentification Identify(
+            IReadOnlyList<Function> functions,
+            IGpuAccessor gpuAccessor,
+            ShaderStage stage,
+            InputTopology inputTopology,
+            out int layerInputAttr)
         {
-            if (config.Stage == ShaderStage.Geometry &&
-                config.GpuAccessor.QueryPrimitiveTopology() == InputTopology.Triangles &&
-                !config.GpuAccessor.QueryHostSupportsGeometryShader() &&
-                IsLayerPassthroughGeometryShader(functions, out int layerInputAttr))
+            if (stage == ShaderStage.Geometry &&
+                inputTopology == InputTopology.Triangles &&
+                !gpuAccessor.QueryHostSupportsGeometryShader() &&
+                IsLayerPassthroughGeometryShader(functions, out layerInputAttr))
             {
-                config.SetGeometryShaderLayerInputAttribute(layerInputAttr);
-
                 return ShaderIdentification.GeometryLayerPassthrough;
             }
 
+            layerInputAttr = 0;
             return ShaderIdentification.None;
         }
 
@@ -43,7 +47,7 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 foreach (INode node in block.Operations)
                 {
-                    if (!(node is Operation operation))
+                    if (node is not Operation operation)
                     {
                         continue;
                     }
@@ -84,7 +88,7 @@ namespace Ryujinx.Graphics.Shader.Translation
                                 }
 
                                 writesLayer = true;
-                                layerInputAttr = srcAttributeAsgOp.GetSource(1).Value * 4 + srcAttributeAsgOp.GetSource(3).Value;;
+                                layerInputAttr = srcAttributeAsgOp.GetSource(1).Value * 4 + srcAttributeAsgOp.GetSource(3).Value;
                             }
                             else
                             {
