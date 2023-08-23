@@ -399,7 +399,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             LoadFeatures(maxQueueCount, queueFamilyIndex);
 
-            _window = new Window(this, _surface, _physicalDevice.PhysicalDevice, _device); // OpenVROpenVR
+            _window = new WindowVR(this, _surface, _physicalDevice.PhysicalDevice, _device);
 
             _initialized = true;
         }

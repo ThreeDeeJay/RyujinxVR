@@ -11,6 +11,7 @@ using Ryujinx.Horizon.Common;
 using System;
 using System.Buffers;
 using System.Threading;
+using Ryujinx.OpenVR;
 
 namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 {
@@ -3148,33 +3149,36 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 
         // VR
         [Svc(0x80)]
-        public Result GetVRFOV(out uint fov)
+        public uint GetVRFOV()
         {
-            byte[] bytes = BitConverter.GetBytes(103.9f);
-            fov = BitConverter.ToUInt32(bytes, 0);
-
-            return Result.Success;
+            byte[] bytes = BitConverter.GetBytes(OpenVRManager.FOV);
+            return BitConverter.ToUInt32(bytes, 0);
         }
 
         [Svc(0x81)]
-        public Result GetVRipd(out uint ipd)
+        public uint GetVRIPD()
         {
-            byte[] bytes = BitConverter.GetBytes(0.0675f);
-            ipd = BitConverter.ToUInt32(bytes, 0);
+            byte[] bytes = BitConverter.GetBytes(OpenVRManager.IPD);
+            return BitConverter.ToUInt32(bytes, 0);
+        }
+
+        [Svc(0x82)]
+        public Result SignalVRLeftEye()
+        {
+            OpenVRManager.SignalEvenFrame(true);
+
+            //OpenVRManager.EvenFrame = true;
 
             return Result.Success;
         }
 
-        [Svc(0x82)]
-        public void SignalVRLeftEye()
-        {
-
-        }
-
         [Svc(0x83)]
-        public void SignalVRRightEye()
+        public Result SignalVRRightEye()
         {
+            OpenVRManager.SignalEvenFrame(false);
+            //OpenVRManager.EvenFrame = false;
 
+            return Result.Success;
         }
     }
 }

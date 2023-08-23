@@ -5,15 +5,12 @@ using Silk.NET.Vulkan.Extensions.KHR;
 using System;
 using System.Linq;
 using VkFormat = Silk.NET.Vulkan.Format;
+using Ryujinx.OpenVR;
 using Valve.VR;
-using System.IO;
-using System.Reflection;
-using System.Text;
-using System.IO.MemoryMappedFiles;
 
 namespace Ryujinx.Graphics.Vulkan
 {
-    class OpenVR : WindowBase, IDisposable
+    class WindowVR : WindowBase, IDisposable
     {
         private const int SurfaceWidth = 1280;
         private const int SurfaceHeight = 720;
@@ -33,7 +30,7 @@ namespace Ryujinx.Graphics.Vulkan
         private int _width;
         private int _height;
         private bool _vsyncEnabled;
-        private bool _vsyncModeChanged;
+        private bool _swapchainIsDirty;
         private VkFormat _format;
         private AntiAliasing _currentAntiAliasing;
         private bool _updateEffect;
@@ -43,14 +40,12 @@ namespace Ryujinx.Graphics.Vulkan
         private float _scalingFilterLevel;
         private bool _updateScalingFilter;
         private ScalingFilter _currentScalingFilter;
-        private CVRSystem _vrSystem;
+        private bool _colorSpacePassthroughEnabled;
 
         private TextureView _vrLeftTexture;
         private TextureView _vrRightTexture;
-        private bool _leftSide = false;
-        private MemoryMappedFile _memMapFile;
 
-        public unsafe OpenVR(VulkanRenderer gd, SurfaceKHR surface, PhysicalDevice physicalDevice, Device device)
+        public unsafe WindowVR(VulkanRenderer gd, SurfaceKHR surface, PhysicalDevice physicalDevice, Device device)
         {
             _gd = gd;
             _physicalDevice = physicalDevice;
@@ -59,50 +54,20 @@ namespace Ryujinx.Graphics.Vulkan
 
             CreateSwapchain();
 
-            _memMapFile = MemoryMappedFile.CreateNew("RyujinxVR", 256, MemoryMappedFileAccess.Write, MemoryMappedFileOptions.None, HandleInheritability.None);
+            OpenVRManager.Initialize(physicalDevice);
+            CreateVRTextures(gd);
 
-            using (MemoryMappedViewAccessor viewAccessor = _memMapFile.CreateViewAccessor(0, 4))
+            var semaphoreCreateInfo = new SemaphoreCreateInfo
             {
-                byte[] textBytes = Encoding.UTF8.GetBytes("Here comes some log message.");
-                viewAccessor.WriteArray(0, textBytes, 0, textBytes.Length);
-            }
+                SType = StructureType.SemaphoreCreateInfo,
+            };
 
-            var error = EVRInitError.None;
-            _vrSystem = Valve.VR.OpenVR.Init(ref error, EVRApplicationType.VRApplication_Scene);
+            gd.Api.CreateSemaphore(device, semaphoreCreateInfo, null, out _imageAvailableSemaphore).ThrowOnError();
+            gd.Api.CreateSemaphore(device, semaphoreCreateInfo, null, out _renderFinishedSemaphore).ThrowOnError();
+        }
 
-            if (error != EVRInitError.None)
-                throw new OpenVRException(error);
-
-            string currentDir = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
-            string vrPath = Path.Combine(currentDir, "vr");
-
-            var appError = Valve.VR.OpenVR.Applications.AddApplicationManifest(Path.Combine(vrPath, "manifest.vrmanifest"), false);
-
-            if (appError != EVRApplicationError.None)
-                throw new OpenVRException(appError);
-
-            var inputError = Valve.VR.OpenVR.Input.SetActionManifestPath(Path.Combine(vrPath, "action_manifest.json"));
-
-            if (inputError != EVRInputError.None)
-                throw new OpenVRException(inputError);
-
-            uint pnWidth = 0, pnHeight = 0;
-            _vrSystem.GetRecommendedRenderTargetSize(ref pnWidth, ref pnHeight);
-
-            StringBuilder pchValueExt = new StringBuilder(256);
-            var dExtSize = Valve.VR.OpenVR.Compositor.GetVulkanDeviceExtensionsRequired(physicalDevice.Handle, pchValueExt, (uint)pchValueExt.Capacity);
-
-            StringBuilder pchValueInst = new StringBuilder(256);
-            var dInstSize = Valve.VR.OpenVR.Compositor.GetVulkanInstanceExtensionsRequired(pchValueInst, (uint)pchValueExt.Capacity);
-
-            //_gd.Api.GetPhysicalDeviceProperties2(
-
-            /*ulong pnDevice = 0;
-            _vrSystem.GetOutputDevice(ref pnDevice, ETextureType.Vulkan, gd.Api.CurrentInstance.Value.Handle);*/
-            //_vrSystem.GetOutputDevice(ref pnDevice, ETextureType.Vulkan, physicalDevice.Handle);
-
-            var compositor = Valve.VR.OpenVR.Compositor;
-
+        public void CreateVRTextures(VulkanRenderer gd)
+        {
             var vrSize = _height;
 
             // Create VR Texture
@@ -123,22 +88,68 @@ namespace Ryujinx.Graphics.Vulkan
                 SwizzleComponent.Blue,
                 SwizzleComponent.Alpha);
 
-            _vrLeftTexture = gd.CreateTexture(info, 1) as TextureView;
-            _vrRightTexture = gd.CreateTexture(info, 1) as TextureView;
+            _vrLeftTexture = gd.CreateTexture(info) as TextureView;
+            _vrRightTexture = gd.CreateTexture(info) as TextureView;
+        }
 
-            var semaphoreCreateInfo = new SemaphoreCreateInfo()
+        public unsafe void SubmitTextures(CommandBufferScoped cbs, ITexture texture)
+        {
+            var centerX = texture.Width / 2;
+            var halfSize = _vrLeftTexture.Width / 2;
+            //var centerY = texture.Height / 2;
+
+            var src = new Extents2D(centerX - halfSize, 0, centerX + halfSize, texture.Height);
+            var dst = new Extents2D(0, 0, _vrLeftTexture.Width, _vrLeftTexture.Height);
+
+            if (OpenVRManager.EvenFrame)
+                texture.CopyTo(_vrLeftTexture, src, dst, true);
+            else
+                texture.CopyTo(_vrRightTexture, src, dst, true);
+
+            //_vrTexture.Storage.InsertWriteToReadBarrier(cbs, AccessFlags.TransferReadBit, PipelineStageFlags.TransferBit); //  PipelineStageFlags.FragmentShaderBit
+
+            var vrLeftImage = _vrLeftTexture.GetImage().Get(cbs).Value;
+            var vrRightImage = _vrRightTexture.GetImage().Get(cbs).Value;
+
+            Valve.VR.VRVulkanTextureData_t vrVKTextureDataLeft = new Valve.VR.VRVulkanTextureData_t()
             {
-                SType = StructureType.SemaphoreCreateInfo
+                m_nImage = vrLeftImage.Handle,
+                m_pDevice = _gd.Api.CurrentDevice.Value.Handle,
+                m_pPhysicalDevice = _physicalDevice.Handle,
+                m_pInstance = _gd.Api.CurrentInstance.Value.Handle,
+                m_pQueue = _gd.Queue.Handle,
+                m_nQueueFamilyIndex = _gd.QueueFamilyIndex,
+                m_nWidth = (uint)_vrLeftTexture.Width,
+                m_nHeight = (uint)_vrLeftTexture.Height,
+                m_nFormat = (uint)_vrLeftTexture.VkFormat,
+                m_nSampleCount = 1
             };
 
-            gd.Api.CreateSemaphore(device, semaphoreCreateInfo, null, out _imageAvailableSemaphore).ThrowOnError();
-            gd.Api.CreateSemaphore(device, semaphoreCreateInfo, null, out _renderFinishedSemaphore).ThrowOnError();
+            Valve.VR.Texture_t vrTextureLeft = new Valve.VR.Texture_t() { handle = (nint)(&vrVKTextureDataLeft), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
+
+            Valve.VR.VRVulkanTextureData_t vrVKTextureDataRight = new Valve.VR.VRVulkanTextureData_t()
+            {
+                m_nImage = vrRightImage.Handle,
+                m_pDevice = _gd.Api.CurrentDevice.Value.Handle,
+                m_pPhysicalDevice = _physicalDevice.Handle,
+                m_pInstance = _gd.Api.CurrentInstance.Value.Handle,
+                m_pQueue = _gd.Queue.Handle,
+                m_nQueueFamilyIndex = _gd.QueueFamilyIndex,
+                m_nWidth = (uint)_vrLeftTexture.Width,
+                m_nHeight = (uint)_vrLeftTexture.Height,
+                m_nFormat = (uint)_vrLeftTexture.VkFormat,
+                m_nSampleCount = 1
+            };
+
+            Valve.VR.Texture_t vrTextureRight = new Valve.VR.Texture_t() { handle = (nint)(&vrVKTextureDataRight), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
+
+            OpenVRManager.SubmitTextures(vrTextureLeft, vrTextureRight);
         }
 
         private void RecreateSwapchain()
         {
             var oldSwapchain = _swapchain;
-            _vsyncModeChanged = false;
+            _swapchainIsDirty = false;
 
             for (int i = 0; i < _swapchainImageViews.Length; i++)
             {
@@ -184,7 +195,7 @@ namespace Ryujinx.Graphics.Vulkan
                 imageCount = capabilities.MaxImageCount;
             }
 
-            var surfaceFormat = ChooseSwapSurfaceFormat(surfaceFormats);
+            var surfaceFormat = ChooseSwapSurfaceFormat(surfaceFormats, _colorSpacePassthroughEnabled);
 
             var extent = ChooseSwapExtent(capabilities);
 
@@ -194,7 +205,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             var oldSwapchain = _swapchain;
 
-            var swapchainCreateInfo = new SwapchainCreateInfoKHR()
+            var swapchainCreateInfo = new SwapchainCreateInfoKHR
             {
                 SType = StructureType.SwapchainCreateInfoKhr,
                 Surface = _surface,
@@ -208,7 +219,7 @@ namespace Ryujinx.Graphics.Vulkan
                 PreTransform = capabilities.CurrentTransform,
                 CompositeAlpha = ChooseCompositeAlpha(capabilities.SupportedCompositeAlpha),
                 PresentMode = ChooseSwapPresentMode(presentModes, _vsyncEnabled),
-                Clipped = true
+                Clipped = true,
             };
 
             _gd.SwapchainApi.CreateSwapchain(_device, swapchainCreateInfo, null, out _swapchain).ThrowOnError();
@@ -242,36 +253,54 @@ namespace Ryujinx.Graphics.Vulkan
 
             var subresourceRange = new ImageSubresourceRange(aspectFlags, 0, 1, 0, 1);
 
-            var imageCreateInfo = new ImageViewCreateInfo()
+            var imageCreateInfo = new ImageViewCreateInfo
             {
                 SType = StructureType.ImageViewCreateInfo,
                 Image = swapchainImage,
                 ViewType = ImageViewType.Type2D,
                 Format = format,
                 Components = componentMapping,
-                SubresourceRange = subresourceRange
+                SubresourceRange = subresourceRange,
             };
 
             _gd.Api.CreateImageView(_device, imageCreateInfo, null, out var imageView).ThrowOnError();
             return new Auto<DisposableImageView>(new DisposableImageView(_gd.Api, _device, imageView));
         }
 
-        private static SurfaceFormatKHR ChooseSwapSurfaceFormat(SurfaceFormatKHR[] availableFormats)
+        private static SurfaceFormatKHR ChooseSwapSurfaceFormat(SurfaceFormatKHR[] availableFormats, bool colorSpacePassthroughEnabled)
         {
             if (availableFormats.Length == 1 && availableFormats[0].Format == VkFormat.Undefined)
             {
                 return new SurfaceFormatKHR(VkFormat.B8G8R8A8Unorm, ColorSpaceKHR.PaceSrgbNonlinearKhr);
             }
-
-            foreach (var format in availableFormats)
+            var formatToReturn = availableFormats[0];
+            if (colorSpacePassthroughEnabled)
             {
-                if (format.Format == VkFormat.B8G8R8A8Unorm && format.ColorSpace == ColorSpaceKHR.PaceSrgbNonlinearKhr)
+                foreach (var format in availableFormats)
                 {
-                    return format;
+                    if (format.Format == VkFormat.B8G8R8A8Unorm && format.ColorSpace == ColorSpaceKHR.SpacePassThroughExt)
+                    {
+                        formatToReturn = format;
+                        break;
+                    }
+                    else if (format.Format == VkFormat.B8G8R8A8Unorm && format.ColorSpace == ColorSpaceKHR.PaceSrgbNonlinearKhr)
+                    {
+                        formatToReturn = format;
+                    }
                 }
             }
-
-            return availableFormats[0];
+            else
+            {
+                foreach (var format in availableFormats)
+                {
+                    if (format.Format == VkFormat.B8G8R8A8Unorm && format.ColorSpace == ColorSpaceKHR.PaceSrgbNonlinearKhr)
+                    {
+                        formatToReturn = format;
+                        break;
+                    }
+                }
+            }
+            return formatToReturn;
         }
 
         private static CompositeAlphaFlagsKHR ChooseCompositeAlpha(CompositeAlphaFlagsKHR supportedFlags)
@@ -312,13 +341,11 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 return capabilities.CurrentExtent;
             }
-            else
-            {
-                uint width = Math.Max(capabilities.MinImageExtent.Width, Math.Min(capabilities.MaxImageExtent.Width, SurfaceWidth));
-                uint height = Math.Max(capabilities.MinImageExtent.Height, Math.Min(capabilities.MaxImageExtent.Height, SurfaceHeight));
 
-                return new Extent2D(width, height);
-            }
+            uint width = Math.Max(capabilities.MinImageExtent.Width, Math.Min(capabilities.MaxImageExtent.Width, SurfaceWidth));
+            uint height = Math.Max(capabilities.MinImageExtent.Height, Math.Min(capabilities.MaxImageExtent.Height, SurfaceHeight));
+
+            return new Extent2D(width, height);
         }
 
         public unsafe override void Present(ITexture texture, ImageCrop crop, Action swapBuffersCallback)
@@ -339,7 +366,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (acquireResult == Result.ErrorOutOfDateKhr ||
                     acquireResult == Result.SuboptimalKhr ||
-                    _vsyncModeChanged)
+                    _swapchainIsDirty)
                 {
                     RecreateSwapchain();
                 }
@@ -352,80 +379,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             var swapchainImage = _swapchainImages[nextImage];
 
-            var poses = new TrackedDevicePose_t[Valve.VR.OpenVR.k_unMaxTrackedDeviceCount];
-            var gamePose = new TrackedDevicePose_t[0];
-
-            Valve.VR.OpenVR.Compositor.WaitGetPoses(poses, gamePose);
-
-            var vrEvent = new VREvent_t();
-            while (_vrSystem.PollNextEvent(ref vrEvent, (uint)sizeof(VREvent_t)))
-            {
-
-            }
-
-            for (uint i = 0; i < Valve.VR.OpenVR.k_unMaxTrackedDeviceCount; i++)
-            {
-                var state = new VRControllerState_t();
-                if (_vrSystem.GetControllerState(i, ref state, (uint)sizeof(VREvent_t)))
-                {
-
-                }
-            }
-
-            var mat = _vrSystem.GetProjectionMatrix(EVREye.Eye_Left, 10, 1000);
-
             _gd.FlushAllCommands();
 
             var cbs = _gd.CommandBufferPool.Rent();
 
-            var centerX = texture.Width / 2;
-            var halfSize = _vrLeftTexture.Width / 2;
-            //var centerY = texture.Height / 2;
-
-            var src = new Extents2D(centerX - halfSize, 0, centerX + halfSize, texture.Height);
-            var dst = new Extents2D(0, 0, _vrLeftTexture.Width, _vrLeftTexture.Height);
-
-            if (_leftSide)
-                texture.CopyTo(_vrLeftTexture, src, dst, true);
-            else
-                texture.CopyTo(_vrRightTexture, src, dst, true);
-
-            _leftSide = !_leftSide;
-
-            //_vrTexture.Storage.InsertWriteToReadBarrier(cbs, AccessFlags.TransferReadBit, PipelineStageFlags.TransferBit); //  PipelineStageFlags.FragmentShaderBit
-
-            var vrLeftImage = _vrLeftTexture.GetImage().Get(cbs).Value;
-            var vrRightImage = _vrRightTexture.GetImage().Get(cbs).Value;
-
-            Valve.VR.VRTextureBounds_t bounds = new VRTextureBounds_t() { uMin = 0, uMax = 1, vMin = 1, vMax = 0 };
-
-            Valve.VR.VRVulkanTextureData_t vrVKTextureData = new Valve.VR.VRVulkanTextureData_t() {
-                m_nImage = vrLeftImage.Handle, 
-                m_pDevice = _gd.Api.CurrentDevice.Value.Handle,
-                m_pPhysicalDevice = _physicalDevice.Handle, 
-                m_pInstance = _gd.Api.CurrentInstance.Value.Handle, 
-                m_pQueue = _gd.Queue.Handle,
-                m_nQueueFamilyIndex = _gd.QueueFamilyIndex,
-                m_nWidth = (uint)_vrLeftTexture.Width,
-                m_nHeight = (uint)_vrLeftTexture.Height,
-                m_nFormat = (uint)_vrLeftTexture.VkFormat,
-                m_nSampleCount = 1
-            };
-
-            Valve.VR.Texture_t vrTexture = new Valve.VR.Texture_t() { handle = (nint)(&vrVKTextureData), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
-
-            EVRCompositorError compositorError;
-
-            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Left, ref vrTexture, ref bounds, EVRSubmitFlags.Submit_Default);
-
-            if (compositorError != EVRCompositorError.None)
-                throw new OpenVRException(compositorError);
-
-            vrVKTextureData.m_nImage = vrRightImage.Handle;
-
-            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Right, ref vrTexture, ref bounds, EVRSubmitFlags.Submit_Default);
-
-            if (compositorError != EVRCompositorError.None)         
+            SubmitTextures(cbs, texture);
 
             Transition(
                 cbs.CommandBuffer,
@@ -445,12 +403,11 @@ namespace Ryujinx.Graphics.Vulkan
             }
 
             int srcX0, srcX1, srcY0, srcY1;
-            float scale = view.ScaleFactor;
 
             if (crop.Left == 0 && crop.Right == 0)
             {
                 srcX0 = 0;
-                srcX1 = (int)(view.Width / scale);
+                srcX1 = view.Width;
             }
             else
             {
@@ -461,20 +418,12 @@ namespace Ryujinx.Graphics.Vulkan
             if (crop.Top == 0 && crop.Bottom == 0)
             {
                 srcY0 = 0;
-                srcY1 = (int)(view.Height / scale);
+                srcY1 = view.Height;
             }
             else
             {
                 srcY0 = crop.Top;
                 srcY1 = crop.Bottom;
-            }
-
-            if (scale != 1f)
-            {
-                srcX0 = (int)(srcX0 * scale);
-                srcY0 = (int)(srcY0 * scale);
-                srcX1 = (int)Math.Ceiling(srcX1 * scale);
-                srcY1 = (int)Math.Ceiling(srcY1 * scale);
             }
 
             if (ScreenCaptureRequested)
@@ -499,10 +448,10 @@ namespace Ryujinx.Graphics.Vulkan
             float ratioX = crop.IsStretched ? 1.0f : MathF.Min(1.0f, _height * crop.AspectRatioX / (_width * crop.AspectRatioY));
             float ratioY = crop.IsStretched ? 1.0f : MathF.Min(1.0f, _width * crop.AspectRatioY / (_height * crop.AspectRatioX));
 
-            int dstWidth  = (int)(_width  * ratioX);
+            int dstWidth = (int)(_width * ratioX);
             int dstHeight = (int)(_height * ratioY);
 
-            int dstPaddingX = (_width  - dstWidth)  / 2;
+            int dstPaddingX = (_width - dstWidth) / 2;
             int dstPaddingY = (_height - dstHeight) / 2;
 
             int dstX0 = crop.FlipX ? _width - dstPaddingX : dstPaddingX;
@@ -562,7 +511,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             Result result;
 
-            var presentInfo = new PresentInfoKHR()
+            var presentInfo = new PresentInfoKHR
             {
                 SType = StructureType.PresentInfoKhr,
                 WaitSemaphoreCount = 1,
@@ -570,7 +519,7 @@ namespace Ryujinx.Graphics.Vulkan
                 SwapchainCount = 1,
                 PSwapchains = &swapchain,
                 PImageIndices = &nextImage,
-                PResults = &result
+                PResults = &result,
             };
 
             lock (_gd.QueueLock)
@@ -601,6 +550,12 @@ namespace Ryujinx.Graphics.Vulkan
             _currentScalingFilter = type;
 
             _updateScalingFilter = true;
+        }
+
+        public override void SetColorSpacePassthrough(bool colorSpacePassthroughEnabled)
+        {
+            _colorSpacePassthroughEnabled = colorSpacePassthroughEnabled;
+            _swapchainIsDirty = true;
         }
 
         private void UpdateEffect()
@@ -678,7 +633,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             var subresourceRange = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
 
-            var barrier = new ImageMemoryBarrier()
+            var barrier = new ImageMemoryBarrier
             {
                 SType = StructureType.ImageMemoryBarrier,
                 SrcAccessMask = srcAccess,
@@ -688,7 +643,7 @@ namespace Ryujinx.Graphics.Vulkan
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 Image = image,
-                SubresourceRange = subresourceRange
+                SubresourceRange = subresourceRange,
             };
 
             _gd.Api.CmdPipelineBarrier(
@@ -719,7 +674,7 @@ namespace Ryujinx.Graphics.Vulkan
         public override void ChangeVSyncMode(bool vsyncEnabled)
         {
             _vsyncEnabled = vsyncEnabled;
-            _vsyncModeChanged = true;
+            _swapchainIsDirty = true;
         }
 
         protected virtual void Dispose(bool disposing)
@@ -741,8 +696,6 @@ namespace Ryujinx.Graphics.Vulkan
 
                 _effect?.Dispose();
                 _scalingFilter?.Dispose();
-
-                _memMapFile.Dispose();
             }
         }
 
