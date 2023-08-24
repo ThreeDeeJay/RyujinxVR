@@ -68,12 +68,12 @@ namespace Ryujinx.Graphics.Vulkan
 
         public void CreateVRTextures(VulkanRenderer gd)
         {
-            var vrSize = _height;
-
+            var vrSize = (int)(_height * OpenVRManager.ResScale);
+            
             // Create VR Texture
             var info = new TextureCreateInfo(
-                _height,
-                _height,
+                vrSize,
+                vrSize,
                 1,
                 1,
                 1,
@@ -98,8 +98,11 @@ namespace Ryujinx.Graphics.Vulkan
             var halfSize = _vrLeftTexture.Width / 2;
             //var centerY = texture.Height / 2;
 
-            var src = new Extents2D(centerX - halfSize, 0, centerX + halfSize, texture.Height);
-            var dst = new Extents2D(0, 0, _vrLeftTexture.Width, _vrLeftTexture.Height);
+            var offset = (int)(_vrLeftTexture.Height * 0.1f);
+
+            //var src = new Extents2D(centerX - halfSize, 0, centerX + halfSize, texture.Height);
+            var src = new Extents2D(0, 0, texture.Width, texture.Height);
+            var dst = new Extents2D(offset, offset, _vrLeftTexture.Width - offset, _vrLeftTexture.Height - offset);
 
             if (OpenVRManager.EvenFrame)
                 texture.CopyTo(_vrLeftTexture, src, dst, true);

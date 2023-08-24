@@ -7,6 +7,9 @@ using System.Reflection;
 using System.Text;
 using System.IO.MemoryMappedFiles;
 using Ryujinx.Graphics.Vulkan;
+using System.Numerics;
+using System.Reflection.Metadata;
+//using Ryujinx.Graphics.Gpu;
 
 namespace Ryujinx.OpenVR
 {
@@ -18,6 +21,9 @@ namespace Ryujinx.OpenVR
         public static bool EvenFrame { get => _evenFrame; set => _evenFrame = value; }
         public static float FOV => _fov;
         public static float IPD => _ipd;
+        public static float ResScale => 4;
+
+        public static TrackedDevicePoseData HMDPose => _HMDPose;
 
         public static event EventHandler RenderLeftEye;
         public static event EventHandler RenderRightEye;
@@ -29,7 +35,18 @@ namespace Ryujinx.OpenVR
         private static float _fov = 104f;
         private static float _ipd = 0.0675f;
 
+        private static TrackedDevicePoseData _HMDPose = new TrackedDevicePoseData();
+
         private static Valve.VR.VRTextureBounds_t bounds = new VRTextureBounds_t() { uMin = 0, uMax = 1, vMin = 1, vMax = 0 };
+
+        public struct TrackedDevicePoseData
+        {
+            public string TrackedDeviceName;
+            public Vector3 TrackedDevicePos;
+            public Vector3 TrackedDeviceVel;
+            public Vector3 TrackedDeviceAng;
+            public Vector3 TrackedDeviceAngVel;
+        };
 
         public static void SignalEvenFrame(bool even) {
             if (even) 
@@ -74,13 +91,58 @@ namespace Ryujinx.OpenVR
             _instanceExtensions = pchValueExt.ToString();
         }
 
+        private static void GetPoseData(TrackedDevicePose_t poseRaw, TrackedDevicePoseData poseOut)
+        {
+            if (poseRaw.bPoseIsValid)
+            {
+                HmdMatrix34_t mat = poseRaw.mDeviceToAbsoluteTracking;
+
+                poseOut.TrackedDevicePos = mat.GetPosition();
+                poseOut.TrackedDeviceVel = new Vector3(poseRaw.vVelocity.v0, poseRaw.vVelocity.v1, -poseRaw.vVelocity.v2);
+                poseOut.TrackedDeviceAng = ToEulerAngles(mat.GetRotation());
+                poseOut.TrackedDeviceAngVel = new Vector3(poseRaw.vVelocity.v0, poseRaw.vVelocity.v1, -poseRaw.vVelocity.v2) * (180.0f / 3.141592654f);
+            }
+        }
+
+        public static Vector3 ToEulerAngles(Quaternion q)
+        {
+            Vector3 angles = Vector3.Zero;
+
+            // roll (x-axis rotation)
+            float sinr_cosp = 2 * (q.W * q.X + q.Y * q.Z);
+            float cosr_cosp = 1 - 2 * (q.X * q.X + q.Y * q.Y);
+            angles.Z = MathF.Atan2(sinr_cosp, cosr_cosp);
+
+            // pitch (y-axis rotation)
+            float sinp = 2 * (q.W * q.Y - q.Z * q.X);
+            if (Math.Abs(sinp) >= 1)
+            {
+                angles.X = MathF.CopySign(MathF.PI / 2, sinp);
+            }
+            else
+            {
+                angles.X = MathF.Asin(sinp);
+            }
+
+            // yaw (z-axis rotation)
+            float siny_cosp = 2 * (q.W * q.Z + q.X * q.Y);
+            float cosy_cosp = 1 - 2 * (q.Y * q.Y + q.Z * q.Z);
+            angles.Y = MathF.Atan2(siny_cosp, cosy_cosp);
+
+            return angles;
+        }
+
         public static void GetPoses()
         {
             var poses = new TrackedDevicePose_t[Valve.VR.OpenVR.k_unMaxTrackedDeviceCount];
             var gamePose = new TrackedDevicePose_t[0];
 
             Valve.VR.OpenVR.Compositor.WaitGetPoses(poses, gamePose);
+
+            GetPoseData(poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd], _HMDPose);
+            //m_Input->UpdateActionState(&m_ActiveActionSet, sizeof(vr::VRActiveActionSet_t), 1);
         }
+    
 
         public static void SubmitTextures(Texture_t vrTextureLeft, Texture_t vrTextureRight)
         {

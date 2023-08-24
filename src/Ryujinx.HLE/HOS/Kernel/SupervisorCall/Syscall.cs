@@ -12,6 +12,8 @@ using System;
 using System.Buffers;
 using System.Threading;
 using Ryujinx.OpenVR;
+using System.ComponentModel;
+using Ryujinx.Common.Utilities;
 
 namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 {
@@ -3159,26 +3161,31 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
         public uint GetVRIPD()
         {
             byte[] bytes = BitConverter.GetBytes(OpenVRManager.IPD);
-            return BitConverter.ToUInt32(bytes, 0);
+            return BitConverter.ToUInt32(bytes);
         }
 
         [Svc(0x82)]
-        public Result SignalVRLeftEye()
+        public void SignalVRLeftEye()
         {
             OpenVRManager.SignalEvenFrame(true);
-
             //OpenVRManager.EvenFrame = true;
-
-            return Result.Success;
         }
 
         [Svc(0x83)]
-        public Result SignalVRRightEye()
+        public void SignalVRRightEye()
         {
             OpenVRManager.SignalEvenFrame(false);
             //OpenVRManager.EvenFrame = false;
+        }
 
-            return Result.Success;
+        [Svc(0x84)]
+        public void GetVRHMDOrientation(out uint x, out uint y, out uint z)
+        {
+            var angle = OpenVRManager.HMDPose.TrackedDeviceAng;
+
+            x = BitConverter.ToUInt32(BitConverter.GetBytes(angle.X)); 
+            y = BitConverter.ToUInt32(BitConverter.GetBytes(angle.Y));
+            z = BitConverter.ToUInt32(BitConverter.GetBytes(angle.Z));
         }
     }
 }

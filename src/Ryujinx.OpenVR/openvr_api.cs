@@ -8,6 +8,8 @@
 
 using System;
 using System.Runtime.InteropServices;
+using System.Numerics;
+using System;
 using Valve.VR;
 
 #if UNITY_5_3_OR_NEWER
@@ -5926,7 +5928,7 @@ public enum EBlockQueueCreationFlag
 	public float m9;
 	public float m10;
 	public float m11;
-#if UNITY_5_3_OR_NEWER
+//#if UNITY_5_3_OR_NEWER
 
 	public Vector3 GetPosition()
 	{
@@ -5942,10 +5944,10 @@ public enum EBlockQueueCreationFlag
 	{
 		if (IsRotationValid())
 		{
-			float w = Mathf.Sqrt(Mathf.Max(0, 1 + m0 + m5 + m10)) / 2;
-			float x = Mathf.Sqrt(Mathf.Max(0, 1 + m0 - m5 - m10)) / 2;
-			float y = Mathf.Sqrt(Mathf.Max(0, 1 - m0 + m5 - m10)) / 2;
-			float z = Mathf.Sqrt(Mathf.Max(0, 1 - m0 - m5 + m10)) / 2;
+			float w = MathF.Sqrt(MathF.Max(0, 1 + m0 + m5 + m10)) / 2;
+			float x = MathF.Sqrt(MathF.Max(0, 1 + m0 - m5 - m10)) / 2;
+			float y = MathF.Sqrt(MathF.Max(0, 1 - m0 + m5 - m10)) / 2;
+			float z = MathF.Sqrt(MathF.Max(0, 1 - m0 - m5 + m10)) / 2;
 
 			_copysign(ref x, -m9 - -m6);
 			_copysign(ref y, -m2 - -m8);
@@ -5953,7 +5955,7 @@ public enum EBlockQueueCreationFlag
 
 			return new Quaternion(x, y, z, w);
 		}
-		return Quaternion.identity;
+		return Quaternion.Identity;
 	}
 
 	private static void _copysign(ref float sizeval, float signval)
@@ -5961,7 +5963,7 @@ public enum EBlockQueueCreationFlag
 		if (signval > 0 != sizeval > 0)
 			sizeval = -sizeval;
 	}
-#endif
+//#endif
 }
 [StructLayout(LayoutKind.Sequential)] public struct HmdMatrix33_t
 {
