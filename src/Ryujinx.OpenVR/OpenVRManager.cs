@@ -9,7 +9,6 @@ using System.IO.MemoryMappedFiles;
 using Ryujinx.Graphics.Vulkan;
 using System.Numerics;
 using System.Reflection.Metadata;
-//using Ryujinx.Graphics.Gpu;
 
 namespace Ryujinx.OpenVR
 {
@@ -21,9 +20,31 @@ namespace Ryujinx.OpenVR
         public static bool EvenFrame { get => _evenFrame; set => _evenFrame = value; }
         public static float FOV => _fov;
         public static float IPD => _ipd;
-        public static float ResScale => 4;
+        public static float ResScale { get => _resScale; set => _resScale = value; }
 
-        public static TrackedDevicePoseData HMDPose => _HMDPose;
+        public static TrackedDevicePose_t HMDPose => _HMDPose;
+
+        public static Vector3 RightPosition
+        {
+            get
+            {
+                if (_RightPose.bPoseIsValid)
+                    return (_RightPose.mDeviceToAbsoluteTracking.GetPosition() - _HMDPose.mDeviceToAbsoluteTracking.GetPosition()) * new Vector3(-1, 1, 1);
+                else
+                    return Vector3.UnitZ + Vector3.UnitX;
+            }
+        }
+
+        public static Quaternion RightRotation
+        {
+            get
+            {
+                if (_RightPose.bPoseIsValid)
+                    return _RightPose.mDeviceToAbsoluteTracking.GetRotation();
+                else
+                    return Quaternion.Identity;
+            }
+        }
 
         public static event EventHandler RenderLeftEye;
         public static event EventHandler RenderRightEye;
@@ -34,10 +55,12 @@ namespace Ryujinx.OpenVR
         private static bool _evenFrame;
         private static float _fov = 104f;
         private static float _ipd = 0.0675f;
+        private static float _resScale;
 
-        private static TrackedDevicePoseData _HMDPose = new TrackedDevicePoseData();
+        private static TrackedDevicePose_t _HMDPose;
+        private static TrackedDevicePose_t _RightPose, _LeftPose;
 
-        private static Valve.VR.VRTextureBounds_t bounds = new VRTextureBounds_t() { uMin = 0, uMax = 1, vMin = 1, vMax = 0 };
+        private static Valve.VR.VRTextureBounds_t _boundsL, _boundsR = new VRTextureBounds_t();
 
         public struct TrackedDevicePoseData
         {
@@ -89,6 +112,32 @@ namespace Ryujinx.OpenVR
             StringBuilder pchValueInst = new StringBuilder(256);
             var dInstSize = Valve.VR.OpenVR.Compositor.GetVulkanInstanceExtensionsRequired(pchValueInst, (uint)pchValueExt.Capacity);
             _instanceExtensions = pchValueExt.ToString();
+
+            float l_left = 0.0f, l_right = 0.0f, l_top = 0.0f, l_bottom = 0.0f;
+            _vrSystem.GetProjectionRaw(EVREye.Eye_Left, ref l_left, ref l_right, ref l_top, ref l_bottom);
+
+            float r_left = 0.0f, r_right = 0.0f, r_top = 0.0f, r_bottom = 0.0f;
+            _vrSystem.GetProjectionRaw(EVREye.Eye_Right, ref r_left, ref r_right, ref r_top, ref r_bottom);
+
+            float tanHalfFovU = MathF.Max(MathF.Max( -l_left, l_right), MathF.Max(-r_left, r_right));
+            float tanHalfFovV = MathF.Max(MathF.Max( -l_top, l_bottom), MathF.Max(-r_top, r_bottom));
+
+            _boundsL.uMin = 0.5f + 0.5f * l_left / tanHalfFovU;
+            _boundsL.uMax = 0.5f + 0.5f * l_right / tanHalfFovU;
+            _boundsL.vMin = 0.5f - 0.5f * l_bottom / tanHalfFovV;
+            _boundsL.vMax = 0.5f - 0.5f * l_top / tanHalfFovV;
+
+            _boundsR.uMin = 0.5f + 0.5f * r_left / tanHalfFovU;
+            _boundsR.uMax = 0.5f + 0.5f * r_right / tanHalfFovU;
+            _boundsR.vMin = 0.5f - 0.5f * r_bottom / tanHalfFovV;
+            _boundsR.vMax = 0.5f - 0.5f * r_top / tanHalfFovV;
+
+            _fov = 2f * MathF.Atan(tanHalfFovU) * 360 / (MathF.PI * 2f);
+        }
+
+        public static uint EncodeFloat(float value)
+        {
+            return BitConverter.ToUInt32(BitConverter.GetBytes(value));
         }
 
         private static void GetPoseData(TrackedDevicePose_t poseRaw, TrackedDevicePoseData poseOut)
@@ -139,23 +188,30 @@ namespace Ryujinx.OpenVR
 
             Valve.VR.OpenVR.Compositor.WaitGetPoses(poses, gamePose);
 
-            GetPoseData(poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd], _HMDPose);
+            _HMDPose = poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd];
+
+            var leftID = _vrSystem.GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole.LeftHand);
+            var rightID = _vrSystem.GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole.RightHand);
+
+            _LeftPose = poses[leftID];
+            _RightPose = poses[rightID];
+
+            //GetPoseData(poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd], _HMDPose);
             //m_Input->UpdateActionState(&m_ActiveActionSet, sizeof(vr::VRActiveActionSet_t), 1);
         }
     
-
         public static void SubmitTextures(Texture_t vrTextureLeft, Texture_t vrTextureRight)
         {
             GetPoses();
 
             EVRCompositorError compositorError;
 
-            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Left, ref vrTextureLeft, ref bounds, EVRSubmitFlags.Submit_Default);
+            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Left, ref vrTextureLeft, ref _boundsL, EVRSubmitFlags.Submit_Default);
 
             if (compositorError != EVRCompositorError.None)
                 throw new OpenVRException(compositorError);
 
-            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Right, ref vrTextureRight, ref bounds, EVRSubmitFlags.Submit_Default);
+            compositorError = Valve.VR.OpenVR.Compositor.Submit(EVREye.Eye_Right, ref vrTextureRight, ref _boundsR, EVRSubmitFlags.Submit_Default);
 
             if (compositorError != EVRCompositorError.None)
                 throw new OpenVRException(compositorError);

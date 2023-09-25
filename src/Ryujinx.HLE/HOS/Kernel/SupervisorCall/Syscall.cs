@@ -14,6 +14,7 @@ using System.Threading;
 using Ryujinx.OpenVR;
 using System.ComponentModel;
 using Ryujinx.Common.Utilities;
+using System.Numerics;
 
 namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 {
@@ -3179,13 +3180,50 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
         }
 
         [Svc(0x84)]
-        public void GetVRHMDOrientation(out uint x, out uint y, out uint z)
+        public void GetVRHMDRotation(out uint x, out uint y, out uint z, out uint w)
         {
-            var angle = OpenVRManager.HMDPose.TrackedDeviceAng;
+            var pose = OpenVRManager.HMDPose;
 
-            x = BitConverter.ToUInt32(BitConverter.GetBytes(angle.X)); 
-            y = BitConverter.ToUInt32(BitConverter.GetBytes(angle.Y));
-            z = BitConverter.ToUInt32(BitConverter.GetBytes(angle.Z));
+            if (pose.bPoseIsValid)
+            {
+                var rotation = pose.mDeviceToAbsoluteTracking.GetRotation();
+
+                x = OpenVRManager.EncodeFloat(-rotation.X);
+                y = OpenVRManager.EncodeFloat(rotation.Y);
+                z = OpenVRManager.EncodeFloat(rotation.Z);
+                w = OpenVRManager.EncodeFloat(-rotation.W);
+            }
+            else
+            {
+                var zero = BitConverter.GetBytes(0f);
+                var one = BitConverter.GetBytes(1f);
+
+                x = BitConverter.ToUInt32(zero);
+                y = BitConverter.ToUInt32(zero);
+                z = BitConverter.ToUInt32(zero);
+                w = BitConverter.ToUInt32(one);
+            }
+        }
+
+        [Svc(0x85)]
+        public void GetVRRightPosition(out uint x, out uint y, out uint z)
+        {
+            var position = OpenVRManager.RightPosition;
+
+            x = OpenVRManager.EncodeFloat(position.X);
+            y = OpenVRManager.EncodeFloat(position.Y);
+            z = OpenVRManager.EncodeFloat(position.Z);
+        }
+
+        [Svc(0x86)]
+        public void GetVRRightRotation(out uint qx, out uint qy, out uint qz, out uint qw)
+        {
+            var rotation = OpenVRManager.RightRotation;
+
+            qx = OpenVRManager.EncodeFloat(-rotation.X);
+            qy = OpenVRManager.EncodeFloat(rotation.Y);
+            qz = OpenVRManager.EncodeFloat(rotation.Z);
+            qw = OpenVRManager.EncodeFloat(-rotation.W);
         }
     }
 }

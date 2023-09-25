@@ -1092,7 +1092,9 @@ namespace Ryujinx.Ui
             int resScale = ConfigurationState.Instance.Graphics.ResScale;
             float resScaleCustom = ConfigurationState.Instance.Graphics.ResScaleCustom;
 
-            Graphics.Gpu.GraphicsConfig.ResScale = (resScale == -1) ? resScaleCustom : resScale;
+            float trueScale = (resScale == -1) ? resScaleCustom : resScale;
+            Ryujinx.OpenVR.OpenVRManager.ResScale = trueScale;
+            Graphics.Gpu.GraphicsConfig.ResScale = trueScale;
             Graphics.Gpu.GraphicsConfig.MaxAnisotropy = ConfigurationState.Instance.Graphics.MaxAnisotropy;
             Graphics.Gpu.GraphicsConfig.ShadersDumpPath = ConfigurationState.Instance.Graphics.ShadersDumpPath;
             Graphics.Gpu.GraphicsConfig.EnableShaderCache = ConfigurationState.Instance.Graphics.EnableShaderCache;
