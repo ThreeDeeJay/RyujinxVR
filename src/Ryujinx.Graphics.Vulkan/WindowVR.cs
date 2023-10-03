@@ -42,8 +42,7 @@ namespace Ryujinx.Graphics.Vulkan
         private ScalingFilter _currentScalingFilter;
         private bool _colorSpacePassthroughEnabled;
 
-        private TextureView _vrLeftTexture;
-        private TextureView _vrRightTexture;
+        private TextureView _vrEmptyTexture, _vrLeftTexture, _vrRightTexture;
 
         public unsafe WindowVR(VulkanRenderer gd, SurfaceKHR surface, PhysicalDevice physicalDevice, Device device)
         {
@@ -90,19 +89,39 @@ namespace Ryujinx.Graphics.Vulkan
 
             _vrLeftTexture = gd.CreateTexture(info) as TextureView;
             _vrRightTexture = gd.CreateTexture(info) as TextureView;
+
+            var infoEmpty = new TextureCreateInfo(
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                4,
+                GAL.Format.R8G8B8A8Unorm,
+                DepthStencilMode.Depth,
+                Target.Texture2D,
+                SwizzleComponent.Red,
+                SwizzleComponent.Green,
+                SwizzleComponent.Blue,
+                SwizzleComponent.Alpha);
+
+            _vrEmptyTexture = gd.CreateTexture(infoEmpty) as TextureView;
         }
 
         public unsafe void SubmitTextures(CommandBufferScoped cbs, ITexture texture)
         {
-            var centerX = texture.Width / 2;
-            var halfSize = _vrLeftTexture.Width / 2;
+            /*var centerX = texture.Width / 2;
+            var halfSize = _vrLeftTexture.Width / 2;*/
             //var centerY = texture.Height / 2;
 
-            var offset = (int)(_vrLeftTexture.Height * 0.1f);
+            //var offset = (int)(_vrLeftTexture.Height * 0.1f);
 
             //var src = new Extents2D(centerX - halfSize, 0, centerX + halfSize, texture.Height);
             var src = new Extents2D(0, 0, texture.Width, texture.Height);
-            var dst = new Extents2D(offset, offset, _vrLeftTexture.Width - offset, _vrLeftTexture.Height - offset);
+            //var dst = new Extents2D(offset, offset, _vrLeftTexture.Width - offset, _vrLeftTexture.Height - offset);
+            var dst = new Extents2D(0, 0, _vrLeftTexture.Width, _vrLeftTexture.Height);
 
             if (OpenVRManager.EvenFrame)
                 texture.CopyTo(_vrLeftTexture, src, dst, true);
@@ -113,6 +132,10 @@ namespace Ryujinx.Graphics.Vulkan
 
             var vrLeftImage = _vrLeftTexture.GetImage().Get(cbs).Value;
             var vrRightImage = _vrRightTexture.GetImage().Get(cbs).Value;
+
+            var overlayView = (TextureView)texture;
+            var overlayImage = overlayView.GetImage().Get(cbs).Value;
+            var emptyImage = _vrEmptyTexture.GetImage().Get(cbs).Value;
 
             Valve.VR.VRVulkanTextureData_t vrVKTextureDataLeft = new Valve.VR.VRVulkanTextureData_t()
             {
@@ -146,7 +169,39 @@ namespace Ryujinx.Graphics.Vulkan
 
             Valve.VR.Texture_t vrTextureRight = new Valve.VR.Texture_t() { handle = (nint)(&vrVKTextureDataRight), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
 
-            OpenVRManager.SubmitTextures(vrTextureLeft, vrTextureRight);
+            Valve.VR.VRVulkanTextureData_t overlayTextureData = new Valve.VR.VRVulkanTextureData_t()
+            {
+                m_nImage = overlayImage.Handle,
+                m_pDevice = _gd.Api.CurrentDevice.Value.Handle,
+                m_pPhysicalDevice = _physicalDevice.Handle,
+                m_pInstance = _gd.Api.CurrentInstance.Value.Handle,
+                m_pQueue = _gd.Queue.Handle,
+                m_nQueueFamilyIndex = _gd.QueueFamilyIndex,
+                m_nWidth = (uint)overlayView.Width,
+                m_nHeight = (uint)overlayView.Height,
+                m_nFormat = (uint)overlayView.VkFormat,
+                m_nSampleCount = 1
+            };
+
+            Valve.VR.Texture_t overlayTexture = new Valve.VR.Texture_t() { handle = (nint)(&overlayTextureData), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
+
+            Valve.VR.VRVulkanTextureData_t emptyTextureData = new Valve.VR.VRVulkanTextureData_t()
+            {
+                m_nImage = emptyImage.Handle,
+                m_pDevice = _gd.Api.CurrentDevice.Value.Handle,
+                m_pPhysicalDevice = _physicalDevice.Handle,
+                m_pInstance = _gd.Api.CurrentInstance.Value.Handle,
+                m_pQueue = _gd.Queue.Handle,
+                m_nQueueFamilyIndex = _gd.QueueFamilyIndex,
+                m_nWidth = (uint)_vrEmptyTexture.Width,
+                m_nHeight = (uint)_vrEmptyTexture.Height,
+                m_nFormat = (uint)_vrEmptyTexture.VkFormat,
+                m_nSampleCount = 1
+            };
+
+            Valve.VR.Texture_t emptyTexture = new Valve.VR.Texture_t() { handle = (nint)(&emptyTextureData), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
+
+            OpenVRManager.SubmitTextures(overlayTexture, vrTextureLeft, vrTextureRight);
         }
 
         private void RecreateSwapchain()

@@ -7,6 +7,6 @@
 
   <ItemGroup>
     <PackageReference Include="Silk.NET.Vulkan" />
-  </ItemGroup>
-
+  </ItemGroup>   
+    
 </Project>
