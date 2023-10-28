@@ -5935,6 +5935,13 @@ public enum EBlockQueueCreationFlag
 		return new Vector3(m3, m7, -m11);
 	}
 
+	public void SetPosition(Vector3 position)
+	{
+        this.m3 = position.X;
+        this.m7 = position.Y;
+        this.m11 = position.Z;
+	}
+
 	public bool IsRotationValid()
 	{
 		return ((m2 != 0 || m6 != 0 || m10 != 0) && (m1 != 0 || m5 != 0 || m9 != 0));

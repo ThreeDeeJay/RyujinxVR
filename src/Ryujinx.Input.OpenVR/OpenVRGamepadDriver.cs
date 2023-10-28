@@ -1,6 +1,9 @@
-﻿using Ryujinx.SDL2.Common;
+﻿using Ryujinx.Common.Logging;
+using Ryujinx.OpenVR;
+using Ryujinx.SDL2.Common;
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using static SDL2.SDL;
 
 namespace Ryujinx.Input.OpenVR
@@ -17,6 +20,8 @@ namespace Ryujinx.Input.OpenVR
         public event Action<string> OnGamepadConnected;
         public event Action<string> OnGamepadDisconnected;
 
+        private int virtualId;
+
         public OpenVRGamepadDriver()
         {
             _gamepadsInstanceIdsMapping = new Dictionary<int, string>();
@@ -26,6 +31,9 @@ namespace Ryujinx.Input.OpenVR
             SDL2Driver.Instance.OnJoyStickConnected += HandleJoyStickConnected;
             SDL2Driver.Instance.OnJoystickDisconnected += HandleJoyStickDisconnected;
 
+            virtualId = SDL_JoystickAttachVirtual((int)SDL_JoystickType.SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 12, 0);
+            OpenVRManager.UpdateVirtualJoystick += HandleVirtualJoyStickUpdate;
+
             // Add already connected gamepads
             int numJoysticks = SDL_NumJoysticks();
 
@@ -33,6 +41,49 @@ namespace Ryujinx.Input.OpenVR
             {
                 HandleJoyStickConnected(joystickIndex, SDL_JoystickGetDeviceInstanceID(joystickIndex));
             }
+        }
+
+        private byte ConvertKey(bool state)
+        {
+            return (byte)(state ? 0x1 : 0x0);
+        }
+
+        static short Lerp(short min, short max, float value)
+        {
+            return (short)(min + ((max - min) * value));
+        }
+
+        private void HandleVirtualJoyStickUpdate(OpenVRManager.VRJoystick actions)
+        {
+            nint joystick = SDL_JoystickOpen(virtualId);
+
+            int result = SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A, ConvertKey(actions.A));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B, ConvertKey(actions.B));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X, ConvertKey(actions.X));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y, ConvertKey(actions.Y));
+
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_START, ConvertKey(actions.Start));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_BACK, ConvertKey(actions.Select));
+
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX, (short)(actions.LeftStick.X * short.MaxValue));
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY, (short)(actions.LeftStick.Y * short.MaxValue));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSTICK, ConvertKey(actions.LeftStickPress));
+
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_RIGHTX, (short)(actions.RightStick.X * short.MaxValue));
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_RIGHTY, (short)(actions.RightStick.Y * short.MaxValue));
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSTICK, ConvertKey(actions.RightStickPress));
+
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER, ConvertKey(actions.LeftBumper));
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERLEFT, Lerp(short.MinValue, short.MaxValue, actions.LeftTrigger));
+            //SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERLEFT, (short)(actions.LeftTrigger * short.MaxValue));
+
+            SDL_JoystickSetVirtualButton(joystick, (int)SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, ConvertKey(actions.RightBumper));
+            SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERRIGHT, Lerp(short.MinValue, short.MaxValue, actions.RightTrigger));
+            //SDL_JoystickSetVirtualAxis(joystick, (int)SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_TRIGGERRIGHT, (short)(actions.RightTrigger * short.MaxValue));
+
+            SDL_JoystickClose(joystick);
+
+            SDL_JoystickUpdate();
         }
 
         private static string GenerateGamepadId(int joystickIndex)

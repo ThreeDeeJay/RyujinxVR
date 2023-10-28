@@ -329,8 +329,8 @@ namespace Ryujinx.Ui
 
             Task.Run(RefreshFirmwareLabel);
 
-            InputManager = new InputManager(new GTK3KeyboardDriver(this), new SDL2GamepadDriver());
-            //InputManager = new InputManager(new OpenVRGamepadDriver(), new SDL2GamepadDriver());
+            //InputManager = new InputManager(new GTK3KeyboardDriver(this), new SDL2GamepadDriver());
+            InputManager = new InputManager(new GTK3KeyboardDriver(this), new OpenVRGamepadDriver());
         }
 
         private void UpdateIgnoreMissingServicesState(object sender, ReactiveEventArgs<bool> args)

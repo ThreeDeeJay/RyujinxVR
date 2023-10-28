@@ -133,10 +133,6 @@ namespace Ryujinx.Graphics.Vulkan
             var vrLeftImage = _vrLeftTexture.GetImage().Get(cbs).Value;
             var vrRightImage = _vrRightTexture.GetImage().Get(cbs).Value;
 
-            var overlayView = (TextureView)texture;
-            var overlayImage = overlayView.GetImage().Get(cbs).Value;
-            var emptyImage = _vrEmptyTexture.GetImage().Get(cbs).Value;
-
             Valve.VR.VRVulkanTextureData_t vrVKTextureDataLeft = new Valve.VR.VRVulkanTextureData_t()
             {
                 m_nImage = vrLeftImage.Handle,
@@ -169,6 +165,10 @@ namespace Ryujinx.Graphics.Vulkan
 
             Valve.VR.Texture_t vrTextureRight = new Valve.VR.Texture_t() { handle = (nint)(&vrVKTextureDataRight), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
 
+            // Overlay
+            var overlayView = (TextureView)texture;
+            var overlayImage = overlayView.GetImage().Get(cbs).Value;
+
             Valve.VR.VRVulkanTextureData_t overlayTextureData = new Valve.VR.VRVulkanTextureData_t()
             {
                 m_nImage = overlayImage.Handle,
@@ -184,6 +184,9 @@ namespace Ryujinx.Graphics.Vulkan
             };
 
             Valve.VR.Texture_t overlayTexture = new Valve.VR.Texture_t() { handle = (nint)(&overlayTextureData), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
+
+            // Empty
+            var emptyImage = _vrEmptyTexture.GetImage().Get(cbs).Value;
 
             Valve.VR.VRVulkanTextureData_t emptyTextureData = new Valve.VR.VRVulkanTextureData_t()
             {
@@ -201,7 +204,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             Valve.VR.Texture_t emptyTexture = new Valve.VR.Texture_t() { handle = (nint)(&emptyTextureData), eType = ETextureType.Vulkan, eColorSpace = EColorSpace.Auto };
 
-            OpenVRManager.SubmitTextures(overlayTexture, vrTextureLeft, vrTextureRight);
+            OpenVRManager.SubmitTextures(emptyTexture, vrTextureLeft, vrTextureRight, overlayTexture);
         }
 
         private void RecreateSwapchain()

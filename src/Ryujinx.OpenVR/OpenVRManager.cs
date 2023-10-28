@@ -9,6 +9,7 @@ using System.IO.MemoryMappedFiles;
 using Ryujinx.Graphics.Vulkan;
 using System.Numerics;
 using System.Reflection.Metadata;
+using Ryujinx.Common.Logging;
 
 namespace Ryujinx.OpenVR
 {
@@ -22,7 +23,7 @@ namespace Ryujinx.OpenVR
         public static float IPD => _ipd;
         public static float ResScale { get => _resScale; set => _resScale = value; }
         public static bool FlatMode { get => _flatMode; }
-
+        //public static nint GamepadId { get => _gamepadId; set => _gamepadId = value; }
         public static TrackedDevicePose_t HMDPose => _HMDPose;
 
         public static Vector3 RightPosition
@@ -55,10 +56,11 @@ namespace Ryujinx.OpenVR
         private static string _deviceExtensions = "";
         private static string _instanceExtensions = "";
         private static bool _evenFrame;
+        private static bool _lastEvenFrame;
+        private static int _frameCount = 0;
         private static float _fov = 104f;
         private static float _ipd = 0.0675f;
         private static float _resScale;
-
         private static string _trackingSysName = "";
         private static string _modelNumber = "";
         private static string _manufacturerName = "";
@@ -70,6 +72,36 @@ namespace Ryujinx.OpenVR
 
         private static ulong _menuOverlayHandle;
         private static bool _flatMode = true;
+
+        // Controllers
+        //private static nint _gamepadId = -1;
+        private static VRActiveActionSet_t _activeActionSet;
+        private static VRAction[] _vrActions;
+        public static event Action<VRJoystick> UpdateVirtualJoystick;
+
+        struct VRAction {
+            public ulong handle;
+            public bool analog;
+        }
+
+        public struct VRJoystick
+        {
+            public bool A;
+            public bool B;
+            public bool X;
+            public bool Y;
+            public bool Start;
+            public bool Select;
+            public Vector2 LeftStick;
+            public bool LeftStickPress;
+            public Vector2 RightStick;
+            public bool RightStickPress;
+            public bool LeftBumper;
+            public float LeftTrigger;
+            public bool RightBumper;
+            public float RightTrigger;
+
+        }
 
         public struct TrackedDevicePoseData
         {
@@ -106,17 +138,41 @@ namespace Ryujinx.OpenVR
             if (appError != EVRApplicationError.None)
                 throw new OpenVRException(appError);
 
-            var inputError = Valve.VR.OpenVR.Input.SetActionManifestPath(Path.Combine(vrPath, "action_manifest.json"));
+            var inputError = Valve.VR.OpenVR.Input.SetActionManifestPath(Path.Combine(vrPath, "SteamVRActionManifest", "action_manifest.json"));
 
             if (inputError != EVRInputError.None)
                 throw new OpenVRException(inputError);
 
+            // Input
+            _vrActions = new VRAction[] {
+                GetAction("/actions/main/in/A", false),
+                GetAction("/actions/main/in/B", false),
+                GetAction("/actions/main/in/X", false),
+                GetAction("/actions/main/in/Y", false),
+                GetAction("/actions/main/in/Start", false),
+                GetAction("/actions/main/in/Select", false),
+                GetAction("/actions/main/in/LeftStick", true),
+                GetAction("/actions/main/in/LeftStickPress", false),
+                GetAction("/actions/main/in/RightStick", true),
+                GetAction("/actions/main/in/RightStickPress", false),
+                GetAction("/actions/main/in/LeftBumper", false),
+                GetAction("/actions/main/in/LeftTrigger", true),
+                GetAction("/actions/main/in/RightBumper", false),
+                GetAction("/actions/main/in/RightTrigger", true),
+            };
+
+            ulong actionSet = 0; 
+            Valve.VR.OpenVR.Input.GetActionSetHandle("/actions/main", ref actionSet);
+            _activeActionSet = new VRActiveActionSet_t() { ulActionSet = actionSet, ulRestrictedToDevice = Valve.VR.OpenVR.k_ulInvalidInputValueHandle };
+
+            // Tracking
             var propError = ETrackedPropertyError.TrackedProp_Success;
 
             StringBuilder pchValueManufacturerName = new StringBuilder(256);
             _vrSystem.GetStringTrackedDeviceProperty(Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd, ETrackedDeviceProperty.Prop_ManufacturerName_String, pchValueManufacturerName, (uint)pchValueManufacturerName.Capacity, ref propError);
             _manufacturerName = pchValueManufacturerName.ToString();
 
+            // Rendering          
             uint pnWidth = 0, pnHeight = 0;
             _vrSystem.GetRecommendedRenderTargetSize(ref pnWidth, ref pnHeight);
 
@@ -157,6 +213,22 @@ namespace Ryujinx.OpenVR
 
             var mouseScale = new HmdVector2_t { v0 = 1920, v1 = 1080 };
             _vrOverlay.SetOverlayMouseScale(_menuOverlayHandle, ref mouseScale);
+
+            _vrOverlay.SetOverlayFlag(_menuOverlayHandle, VROverlayFlags.IgnoreTextureAlpha, true);
+            _vrOverlay.SetOverlayTexelAspect(_menuOverlayHandle, 1920f / 1080f);
+
+            var bounds = new VRTextureBounds_t { uMin = 0, vMin = 1, uMax = 1, vMax = 0 };
+            _vrOverlay.SetOverlayTextureBounds(_menuOverlayHandle, ref bounds);
+        }
+
+        static VRAction GetAction(string actionName, bool analog=false) {
+            ulong handle = 0;
+            EVRInputError error =  Valve.VR.OpenVR.Input.GetActionHandle(actionName, ref handle);
+
+            if (error != EVRInputError.None)
+                throw new OpenVRException(error);
+
+            return new VRAction { handle = handle, analog = analog };
         }
 
         public static uint EncodeFloat(float value)
@@ -215,29 +287,156 @@ namespace Ryujinx.OpenVR
             _HMDPose = poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd];
 
             var leftID = _vrSystem.GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole.LeftHand);
-            var rightID = _vrSystem.GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole.RightHand);
 
             if (poses.Length > leftID)
                 _LeftPose = poses[leftID];
 
+            var rightID = _vrSystem.GetTrackedDeviceIndexForControllerRole(ETrackedControllerRole.RightHand);
+
             if (poses.Length > rightID)
                 _RightPose = poses[rightID];
-
-            //GetPoseData(poses[Valve.VR.OpenVR.k_unTrackedDeviceIndex_Hmd], _HMDPose);
-            //m_Input->UpdateActionState(&m_ActiveActionSet, sizeof(vr::VRActiveActionSet_t), 1);
         }
 
-        public static void RepositionOverlay()
+        private static void ProcessInput()
         {
+            EVRInputError error = Valve.VR.OpenVR.Input.UpdateActionState(new VRActiveActionSet_t[] { _activeActionSet }, (uint)sizeof(Valve.VR.VRActiveActionSet_t));
+
+            if (error != EVRInputError.None)
+                throw new OpenVRException(error);
+
+            VRJoystick vRJoystick = new VRJoystick();
+
+            InputDigitalActionData_t digitalData = new InputDigitalActionData_t();
+            InputAnalogActionData_t analogData = new InputAnalogActionData_t();
+
+            for (int i = 0; i < _vrActions.Length; i++)
+            {
+                var action = _vrActions[i];
+
+                if (action.analog)
+                {                  
+                    error = Valve.VR.OpenVR.Input.GetAnalogActionData(action.handle, ref analogData, (uint)sizeof(InputAnalogActionData_t), Valve.VR.OpenVR.k_ulInvalidInputValueHandle);
+                    
+                    if (analogData.deltaX != 0 || analogData.deltaY != 0)
+                        Logger.Info?.Print(LogClass.VR, $"ProcessInput - Analog {i}: {analogData.x}, {analogData.y} ({error})");
+                }
+                else
+                {                   
+                    error = Valve.VR.OpenVR.Input.GetDigitalActionData(action.handle, ref digitalData, (uint)sizeof(InputDigitalActionData_t), Valve.VR.OpenVR.k_ulInvalidInputValueHandle);
+
+                    if (digitalData.bChanged) // error != EVRInputError.NoData
+                        Logger.Info?.Print(LogClass.VR, $"ProcessInput - Digital {i}: {digitalData.bState} ({error})");
+                }
+
+                if (error != EVRInputError.None)
+                    continue;
+
+                switch (i)
+                {
+                    case 0:
+                        vRJoystick.A = digitalData.bState;
+                        break;
+                    case 1:
+                        vRJoystick.B = digitalData.bState;
+                        break;
+                    case 2:
+                        vRJoystick.X = digitalData.bState;
+                        break;
+                    case 3:
+                        vRJoystick.Y = digitalData.bState;
+                        break;
+                    case 4:
+                        vRJoystick.Start = digitalData.bState;
+                        break;
+                    case 5:
+                        vRJoystick.Select = digitalData.bState;
+                        break;
+                    case 6:
+                        vRJoystick.LeftStick = new Vector2(analogData.x, -analogData.y);
+                        break;
+                    case 7:
+                        vRJoystick.LeftStickPress = digitalData.bState;
+                        break;
+                    case 8:
+                        vRJoystick.RightStick = new Vector2(analogData.x, -analogData.y);
+                        break;
+                    case 9:
+                        vRJoystick.RightStickPress = digitalData.bState;
+                        break;
+                    case 10:
+                        vRJoystick.LeftBumper = digitalData.bState;
+                        break;
+                    case 11:
+                        vRJoystick.LeftTrigger = analogData.x;
+                        break;
+                    case 12:
+                        vRJoystick.RightBumper = digitalData.bState;
+                        break;
+                    case 13:
+                        vRJoystick.RightTrigger = analogData.x;
+                        break;
+                }
+            }
+
+            UpdateVirtualJoystick(vRJoystick);
+        }
+
+        public static void RepositionOverlays()
+        {
+            var hmdMat = _HMDPose.mDeviceToAbsoluteTracking;
+
+            var hmdPosition = hmdMat.GetPosition();
+            var hmdForward = new Vector3(-hmdMat.m2, 0, -hmdMat.m10);
+
+            var menuTransform = new HmdMatrix34_t {
+                m0 = 1.0f, m1 = 0.0f, m2 = 0.0f, m3 = 0.0f,
+                m4 = 0.0f, m5 = 1.0f, m6 = 0.0f, m7 = 1.0f,
+                m8 = 0.0f, m9 = 0.0f, m10 = 1.0f, m11 = 1.0f
+            };
+
             var trackingOrigin = Valve.VR.OpenVR.Compositor.GetTrackingSpace();
 
-            //_vrOverlay.SetOverlayTransformAbsolute(_menuOverlayHandle);
-            //_vrOverlay.SetOverlayWidthInMeters(_menuOverlayHandle);
+            /*float widthRatio = windowWidth / renderWidth;
+            float heightRatio = windowHeight / renderHeight;
+            menuTransform.m0 *= widthRatio;
+            menuTransform.m5 *= heightRatio;*/
+
+            /*menuTransform.m0 = 3;
+            menuTransform.m5 = 3f * (1080f / 1920f);*/
+
+            var overlayPosition = hmdPosition + (hmdForward * 3);
+
+            menuTransform.SetPosition(overlayPosition);
+
+            float xScale = menuTransform.m0;
+            float hmdRotationDegrees = MathF.Atan2(hmdMat.m2, hmdMat.m10);
+
+            menuTransform.m0 *= MathF.Cos(hmdRotationDegrees);
+            menuTransform.m2 = MathF.Sin(hmdRotationDegrees);
+            menuTransform.m8 = -MathF.Sin(hmdRotationDegrees) * xScale;
+            menuTransform.m10  *= MathF.Cos(hmdRotationDegrees);
+
+            _vrOverlay.SetOverlayTransformAbsolute(_menuOverlayHandle, trackingOrigin, ref menuTransform);
+            _vrOverlay.SetOverlayWidthInMeters(_menuOverlayHandle, 4);
         }
 
-        public static void SubmitTextures(Texture_t overlayTexture, Texture_t vrTextureLeft, Texture_t vrTextureRight)
+        public static void SubmitTextures(Texture_t emptyTexture, Texture_t vrTextureLeft, Texture_t vrTextureRight, Texture_t overlayTexture)
         {
+            if (_evenFrame == _lastEvenFrame)
+                _frameCount++;
+            else
+            {
+                _lastEvenFrame = _evenFrame;
+                _frameCount = 0;
+            }
+
+            if (_frameCount > 3)
+                _flatMode = true;
+            else
+                _flatMode = false;
+
             GetPoses();
+            ProcessInput();
 
             var isVisible = _vrOverlay.IsOverlayVisible(_menuOverlayHandle);
 
@@ -246,14 +445,15 @@ namespace Ryujinx.OpenVR
             if (_flatMode)
             {
                 if (!isVisible)
+                {
+                    RepositionOverlays();
                     _vrOverlay.ShowOverlay(_menuOverlayHandle);
+                }
 
-                _vrOverlay.SetOverlayTexelAspect(_menuOverlayHandle, 1920f / 1080f);
-
-                var bounds = new VRTextureBounds_t { uMin = 0, vMin = 0, uMax = 1, vMax = 1  };
-                _vrOverlay.SetOverlayTextureBounds(_menuOverlayHandle, ref bounds);
-
-                _vrOverlay.SetOverlayTexture(_menuOverlayHandle, ref overlayTexture);
+                _vrOverlay.SetOverlayTexture(_menuOverlayHandle, ref vrTextureRight);
+                
+                localLeft = emptyTexture;
+                localRight = emptyTexture;
             }
             else
             {

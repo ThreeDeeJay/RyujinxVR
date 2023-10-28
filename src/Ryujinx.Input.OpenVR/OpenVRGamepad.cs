@@ -384,7 +384,9 @@ namespace Ryujinx.Input.OpenVR
                 return false;
             }
 
-            return SDL_GameControllerGetButton(_gamepadHandle, _buttonsDriverMapping[(int)inputId]) == 1;
+            var result = SDL_GameControllerGetButton(_gamepadHandle, _buttonsDriverMapping[(int)inputId]);
+
+            return result == 1;
         }
     }
 }
