@@ -13,6 +13,7 @@ using Ryujinx.Audio.Backends.SoundIo;
 using Ryujinx.Audio.Integration;
 using Ryujinx.Common;
 using Ryujinx.Common.Configuration;
+using Ryujinx.Common.Configuration.Multiplayer;
 using Ryujinx.Common.Logging;
 using Ryujinx.Common.SystemInterop;
 using Ryujinx.Cpu;
@@ -208,6 +209,9 @@ namespace Ryujinx.Ui
             ConfigurationState.Instance.System.EnableDockedMode.Event += UpdateDockedModeState;
             ConfigurationState.Instance.System.AudioVolume.Event += UpdateAudioVolumeState;
 
+            ConfigurationState.Instance.Multiplayer.Mode.Event += UpdateMultiplayerMode;
+            ConfigurationState.Instance.Multiplayer.LanInterfaceId.Event += UpdateMultiplayerLanInterfaceId;
+
             if (ConfigurationState.Instance.Ui.StartFullscreen)
             {
                 _startFullScreen.Active = true;
@@ -331,6 +335,22 @@ namespace Ryujinx.Ui
 
             //InputManager = new InputManager(new GTK3KeyboardDriver(this), new SDL2GamepadDriver());
             InputManager = new InputManager(new GTK3KeyboardDriver(this), new OpenVRGamepadDriver());
+        }
+
+        private void UpdateMultiplayerLanInterfaceId(object sender, ReactiveEventArgs<string> args)
+        {
+            if (_emulationContext != null)
+            {
+                _emulationContext.Configuration.MultiplayerLanInterfaceId = args.NewValue;
+            }
+        }
+
+        private void UpdateMultiplayerMode(object sender, ReactiveEventArgs<MultiplayerMode> args)
+        {
+            if (_emulationContext != null)
+            {
+                _emulationContext.Configuration.MultiplayerMode = args.NewValue;
+            }
         }
 
         private void UpdateIgnoreMissingServicesState(object sender, ReactiveEventArgs<bool> args)
@@ -651,7 +671,8 @@ namespace Ryujinx.Ui
                 ConfigurationState.Instance.Graphics.AspectRatio,
                 ConfigurationState.Instance.System.AudioVolume,
                 ConfigurationState.Instance.System.UseHypervisor,
-                ConfigurationState.Instance.Multiplayer.LanInterfaceId.Value);
+                ConfigurationState.Instance.Multiplayer.LanInterfaceId.Value,
+                ConfigurationState.Instance.Multiplayer.Mode);
 
             _emulationContext = new HLE.Switch(configuration);
         }
@@ -1102,6 +1123,14 @@ namespace Ryujinx.Ui
             Graphics.Gpu.GraphicsConfig.EnableShaderCache = ConfigurationState.Instance.Graphics.EnableShaderCache;
             Graphics.Gpu.GraphicsConfig.EnableTextureRecompression = ConfigurationState.Instance.Graphics.EnableTextureRecompression;
             Graphics.Gpu.GraphicsConfig.EnableMacroHLE = ConfigurationState.Instance.Graphics.EnableMacroHLE;
+        }
+
+        public void UpdateInternetAccess()
+        {
+            if (_gameLoaded)
+            {
+                _emulationContext.Configuration.EnableInternetAccess = ConfigurationState.Instance.System.EnableInternetAccess.Value;
+            }
         }
 
         public static void SaveConfig()
